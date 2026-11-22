@@ -20,6 +20,7 @@ const (
 	OpWithdraw           uint64 = 0x56f40007
 	OpWithdrawAll        uint64 = 0x56f40008
 	OpDeleteStatement    uint64 = 0x56f40009
+	OpSetUrl             uint64 = 0x56f4000a
 	OpTextComment        uint64 = 0x00000000
 )
 
@@ -64,6 +65,11 @@ type WithdrawAll struct{}
 
 // DeleteStatement: the author deletes a statement that has no arguments.
 type DeleteStatement struct{}
+
+// SetUrl: the author replaces the source link; nil removes it.
+type SetUrl struct {
+	URL *string
+}
 
 // Donate is the "donate" text comment.
 type Donate struct{}
@@ -120,6 +126,10 @@ func ParseMessage(body *cell.Cell) (any, error) {
 		msg = WithdrawAll{}
 	case OpDeleteStatement:
 		msg = DeleteStatement{}
+	case OpSetUrl:
+		var url *string
+		url, err = loadMaybeString(s)
+		msg = SetUrl{URL: url}
 	case OpTextComment:
 		var text string
 		text, err = s.LoadStringSnake()
@@ -150,18 +160,25 @@ func loadData(s *cell.Slice) (Data, error) {
 		return Data{}, fmt.Errorf("statement: %w", err)
 	}
 
-	urlRef, err := s.LoadMaybeRef()
+	url, err := loadMaybeString(s)
 	if err != nil {
-		return Data{}, fmt.Errorf("url: %w", err)
+		return Data{}, err
 	}
+	return Data{Statement: statement, URL: url}, nil
+}
 
-	d := Data{Statement: statement}
-	if urlRef != nil {
-		url, err := urlRef.LoadStringSnake()
-		if err != nil {
-			return Data{}, fmt.Errorf("url: %w", err)
-		}
-		d.URL = &url
+// loadMaybeString reads a nullable string: a maybe-ref to a snake cell.
+func loadMaybeString(s *cell.Slice) (*string, error) {
+	ref, err := s.LoadMaybeRef()
+	if err != nil {
+		return nil, fmt.Errorf("url: %w", err)
 	}
-	return d, nil
+	if ref == nil {
+		return nil, nil
+	}
+	str, err := ref.LoadStringSnake()
+	if err != nil {
+		return nil, fmt.Errorf("url: %w", err)
+	}
+	return &str, nil
 }

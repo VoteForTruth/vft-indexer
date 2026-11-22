@@ -246,6 +246,19 @@ func (t Tx) InsertStatement(ctx context.Context, st Statement) error {
 	return err
 }
 
+// RecordURL appends to the public history of the statement's source link and
+// makes it the current one. The creation link is the first entry.
+func (t Tx) RecordURL(ctx context.Context, address string, url *string, at time.Time, lt uint64) error {
+	_, err := t.tx.ExecContext(ctx, `
+		insert into url_history (statement, lt, time, url) values (?1, ?2, ?3, ?4)
+		on conflict do nothing`, address, int64(lt), at.UTC(), url)
+	if err != nil {
+		return err
+	}
+	_, err = t.tx.ExecContext(ctx, `update statements set url = ?2 where address = ?1`, address, url)
+	return err
+}
+
 // MarkDeleted records that the author deleted the statement.
 func (t Tx) MarkDeleted(ctx context.Context, address string, at time.Time) error {
 	_, err := t.tx.ExecContext(ctx, `update statements set deleted_at = ?2 where address = ?1`, address, at.UTC())

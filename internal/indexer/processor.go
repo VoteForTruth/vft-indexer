@@ -154,6 +154,10 @@ func (p *Processor) applyStatement(ctx context.Context, dbtx store.Tx, c *store.
 		ch.added = append(ch.added, vote)
 		return dbtx.InsertContract(ctx, vote)
 
+	case vft.SetUrl:
+		// the contract accepts it only from the author
+		return dbtx.RecordURL(ctx, c.Address, m.URL, txTime(tx), tx.LT)
+
 	case vft.DeleteStatement:
 		// the contract accepts it only from the author and only without arguments
 		return dbtx.MarkDeleted(ctx, c.Address, txTime(tx))
@@ -232,7 +236,7 @@ func (p *Processor) storeStatement(ctx context.Context, dbtx store.Tx, c *store.
 		root, depth = parentRoot, parentDepth+1
 	}
 
-	return dbtx.InsertStatement(ctx, store.Statement{
+	err := dbtx.InsertStatement(ctx, store.Statement{
 		Address:   c.Address,
 		Root:      root,
 		Parent:    c.Parent,
@@ -245,6 +249,10 @@ func (p *Processor) storeStatement(ctx context.Context, dbtx store.Tx, c *store.
 		CreatedAt: txTime(tx),
 		CreatedLT: tx.LT,
 	})
+	if err != nil {
+		return err
+	}
+	return dbtx.RecordURL(ctx, c.Address, m.Data.URL, txTime(tx), tx.LT)
 }
 
 // expectOut checks that the transaction sent a message to the derived address.

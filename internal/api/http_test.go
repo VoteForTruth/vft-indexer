@@ -376,3 +376,44 @@ func TestDeletedStatement(t *testing.T) {
 		t.Error("vote on a deleted statement is missing")
 	}
 }
+
+func TestURLHistory(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+
+	// p1 was created without a link (setup doesn't record history; add it like the processor does)
+	first, second := "https://blocked.example", "https://mirror.example"
+	err := f.st.Apply(ctx, func(tx store.Tx) error {
+		if err := tx.RecordURL(ctx, f.p1, &first, t0, 1); err != nil {
+			return err
+		}
+		return tx.RecordURL(ctx, f.p1, &second, day(2), 2000)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var detail struct {
+		Statement struct {
+			URL        *string
+			URLChanged bool `json:"url_changed"`
+		}
+		URLHistory []struct {
+			URL  *string
+			Time time.Time
+		} `json:"url_history"`
+	}
+	get(t, f, "/statements/"+friendly(f.p1, false), 200, &detail)
+	if detail.Statement.URL == nil || *detail.Statement.URL != second || !detail.Statement.URLChanged {
+		t.Errorf("current link: %+v", detail.Statement)
+	}
+	if len(detail.URLHistory) != 2 || *detail.URLHistory[0].URL != first || !detail.URLHistory[1].Time.Equal(day(2)) {
+		t.Errorf("history: %+v", detail.URLHistory)
+	}
+
+	// a statement with a single entry is not marked as changed
+	get(t, f, "/statements/"+friendly(f.root, false), 200, &detail)
+	if detail.Statement.URLChanged {
+		t.Error("root marked as changed")
+	}
+}

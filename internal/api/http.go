@@ -130,6 +130,8 @@ type statementJSON struct {
 	Hidden    *hiddenJSON   `json:"hidden,omitempty"` // only in the author's own list
 	// the author may delete it: no argument was ever created under it
 	Deletable bool `json:"deletable"`
+	// the author replaced the source link; the history is in the statement detail
+	URLChanged bool `json:"url_changed"`
 }
 
 func (s *Server) contract(raw string) string {
@@ -236,10 +238,11 @@ func (s *Server) statementJSON(st statementRow, t tree) statementJSON {
 			Top1Share: stats.top1Share,
 			Top3Share: stats.top3Share,
 		},
-		Donations: t.tallies[st.Address].donations.String(),
-		Arguments: args,
-		Result:    resultJSON{ProWeight: proW.String(), ConWeight: conW.String(), ProAmount: proA.String(), ConAmount: conA.String()},
-		Deletable: st.Deletable,
+		Donations:  t.tallies[st.Address].donations.String(),
+		Arguments:  args,
+		Result:     resultJSON{ProWeight: proW.String(), ConWeight: conW.String(), ProAmount: proA.String(), ConAmount: conA.String()},
+		Deletable:  st.Deletable,
+		URLChanged: st.URLChanged,
 	}
 }
 
@@ -355,7 +358,22 @@ func (s *Server) statementDetail(r *http.Request) (any, error) {
 	byWeight(pro)
 	byWeight(con)
 
-	return map[string]any{"statement": s.statementJSON(st, t), "pro": pro, "con": con}, nil
+	history, err := s.read.urlHistory(r.Context(), st.Address)
+	if err != nil {
+		return nil, err
+	}
+	urls := []urlChangeJSON{}
+	for _, h := range history {
+		urls = append(urls, urlChangeJSON{URL: h.URL, Time: h.Time})
+	}
+
+	return map[string]any{"statement": s.statementJSON(st, t), "pro": pro, "con": con, "url_history": urls}, nil
+}
+
+// urlChangeJSON is one entry of the public history of a source link.
+type urlChangeJSON struct {
+	URL  *string   `json:"url"`
+	Time time.Time `json:"time"`
 }
 
 type voterJSON struct {

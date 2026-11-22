@@ -46,10 +46,13 @@ type statementRow struct {
 	// no argument was ever created under it, so the author may delete it. Counted
 	// from the contract counters: hidden and deleted arguments still count.
 	Deletable bool
+	// the author replaced the source link at least once
+	URLChanged bool
 }
 
 const statementColumns = `address, root, parent, depth, idx, pro, author, text, url, created_at, hidden, hidden_reason, hidden_at, deleted_at is not null,
-	coalesce((select c.next_pro + c.next_con from contracts c where c.address = statements.address), 0) = 0`
+	coalesce((select c.next_pro + c.next_con from contracts c where c.address = statements.address), 0) = 0,
+	(select count(*) from url_history h where h.statement = statements.address) > 1`
 
 func scanStatements(ctx context.Context, db *sql.DB, query string, args ...any) ([]statementRow, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -61,7 +64,7 @@ func scanStatements(ctx context.Context, db *sql.DB, query string, args ...any) 
 	var list []statementRow
 	for rows.Next() {
 		var s statementRow
-		err = rows.Scan(&s.Address, &s.Root, &s.Parent, &s.Depth, &s.Idx, &s.Pro, &s.Author, &s.Text, &s.URL, &s.CreatedAt, &s.Hidden, &s.Reason, &s.HiddenAt, &s.Deleted, &s.Deletable)
+		err = rows.Scan(&s.Address, &s.Root, &s.Parent, &s.Depth, &s.Idx, &s.Pro, &s.Author, &s.Text, &s.URL, &s.CreatedAt, &s.Hidden, &s.Reason, &s.HiddenAt, &s.Deleted, &s.Deletable, &s.URLChanged)
 		if err != nil {
 			return nil, err
 		}
@@ -101,6 +104,32 @@ func (r reader) byAuthor(ctx context.Context, author string) ([]statementRow, er
 
 func (r reader) hidden(ctx context.Context) ([]statementRow, error) {
 	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where hidden order by hidden_at desc`)
+}
+
+type urlChange struct {
+	URL  *string
+	Time time.Time
+}
+
+// urlHistory returns the links of a statement, oldest first: the creation link,
+// then every replacement by the author.
+func (r reader) urlHistory(ctx context.Context, statement string) ([]urlChange, error) {
+	rows, err := r.db.QueryContext(ctx, `select url, time from url_history where statement = ?1 order by lt`, statement)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []urlChange
+	for rows.Next() {
+		var c urlChange
+		if err = rows.Scan(&c.URL, &c.Time); err != nil {
+			return nil, err
+		}
+		c.Time = c.Time.UTC()
+		list = append(list, c)
+	}
+	return list, rows.Err()
 }
 
 // tally is the folded state of all votes and donations of one statement.

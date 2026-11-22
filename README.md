@@ -17,6 +17,10 @@ Every addition to a vote is a lot that grows linearly to its full amount over **
 
 The result of a dispute is the weight of its direct pro arguments vs its direct con arguments. Concentration is the share of the largest 1 and 3 voters in the amount.
 
+### Source links
+
+The text of a statement never changes; the author may replace its source link (`SetUrl`), e.g. when a site is blocked. Every link is kept: `GET /statements/{address}` returns `url_history` (the creation link first, then each replacement with its time), and statements carry `"url_changed": true` once the link was replaced.
+
 ### Deletion
 
 The author can delete a statement while no argument was ever created under it (`DeleteStatement`; the contract checks its counters, so hidden or deleted arguments still count). A deleted statement disappears from the feed, from its parent and from the author's list; `GET /statements/{address}` answers `410 {"deleted": true}`. Votes on it stay in `GET /wallets/{address}/votes` with `"deleted": true` and no text, so voters can withdraw. Statements carry `"deletable": true` while deletion is allowed.

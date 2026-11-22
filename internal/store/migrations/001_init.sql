@@ -31,8 +31,13 @@ create table statements (
     url           text,
     created_at    timestamp not null,
     created_lt    integer not null,
+    -- moderation: hidden from the API, with a public reason and time
     hidden        boolean not null default false,
-    hidden_reason text
+    hidden_reason text,
+    hidden_at     timestamp,
+    -- the author deleted it (allowed only while it has no arguments); the row
+    -- stays so voters can still find and withdraw their votes
+    deleted_at    timestamp
 );
 
 create index statements_parent on statements (parent);
@@ -65,4 +70,15 @@ create table processed_txs (
 create table scan_cursor (
     id       integer primary key check (id = 1),
     mc_seqno integer not null
+);
+
+-- Public history of source links: the first row is the link the statement was
+-- created with (null if none), every SetUrl by the author adds a row. The text
+-- of a statement never changes, the link may.
+create table url_history (
+    statement text not null,
+    lt        integer not null,
+    time      timestamp not null,
+    url       text,
+    primary key (statement, lt)
 );
