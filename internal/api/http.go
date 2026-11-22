@@ -128,6 +128,8 @@ type statementJSON struct {
 	Result    resultJSON    `json:"result"`
 	Activity  *int          `json:"activity_24h,omitempty"`
 	Hidden    *hiddenJSON   `json:"hidden,omitempty"` // only in the author's own list
+	// the author may delete it: no argument was ever created under it
+	Deletable bool `json:"deletable"`
 }
 
 func (s *Server) contract(raw string) string {
@@ -237,6 +239,7 @@ func (s *Server) statementJSON(st statementRow, t tree) statementJSON {
 		Donations: t.tallies[st.Address].donations.String(),
 		Arguments: args,
 		Result:    resultJSON{ProWeight: proW.String(), ConWeight: conW.String(), ProAmount: proA.String(), ConAmount: conA.String()},
+		Deletable: st.Deletable,
 	}
 }
 
@@ -313,6 +316,9 @@ func (s *Server) statementDetail(r *http.Request) (any, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if st.Deleted {
+		return nil, httpError{http.StatusGone, map[string]any{"deleted": true}}
 	}
 	if st.Hidden {
 		return nil, httpError{http.StatusGone, map[string]any{"hidden": true, "reason": st.Reason}}
@@ -391,6 +397,7 @@ type walletVoteJSON struct {
 	Amount    string    `json:"amount"`
 	Weight    string    `json:"weight"`
 	Since     time.Time `json:"since"`
+	Deleted   bool      `json:"deleted,omitempty"` // the author deleted it: no text, only the money to withdraw
 }
 
 // GET /wallets/{address}/votes: current votes of a wallet.
@@ -421,11 +428,17 @@ func (s *Server) walletVotes(r *http.Request) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		// the wallet's own votes are shown even on hidden statements, so the money can be found and revoked
+		// the wallet's own votes are shown even on hidden and deleted statements,
+		// so the money can be found and revoked; a deleted text is not repeated
+		text := st.Text
+		if st.Deleted {
+			text = ""
+		}
 		list = append(list, walletVoteJSON{
 			Statement: s.contract(addr),
 			Root:      s.contract(st.Root),
-			Text:      st.Text,
+			Text:      text,
+			Deleted:   st.Deleted,
 			Side:      side(st.Pro),
 			Depth:     st.Depth,
 			Amount:    v.Amount().String(),
@@ -442,7 +455,8 @@ type hiddenJSON struct {
 }
 
 // GET /wallets/{address}/statements: statements and arguments written by the wallet,
-// newest first. Hidden ones are included and marked, so the author knows why.
+// newest first. Hidden ones are included and marked, so the author knows why;
+// deleted ones are not listed.
 func (s *Server) walletStatements(r *http.Request) (any, error) {
 	author, err := parseAddress(r)
 	if err != nil {

@@ -17,6 +17,10 @@ Every addition to a vote is a lot that grows linearly to its full amount over **
 
 The result of a dispute is the weight of its direct pro arguments vs its direct con arguments. Concentration is the share of the largest 1 and 3 voters in the amount.
 
+### Deletion
+
+The author can delete a statement while no argument was ever created under it (`DeleteStatement`; the contract checks its counters, so hidden or deleted arguments still count). A deleted statement disappears from the feed, from its parent and from the author's list; `GET /statements/{address}` answers `410 {"deleted": true}`. Votes on it stay in `GET /wallets/{address}/votes` with `"deleted": true` and no text, so voters can withdraw. Statements carry `"deletable": true` while deletion is allowed.
+
 ### Moderation
 
 Hidden statements are not returned by the API (the contract is not affected). Only illegal content and spam are hidden, never opinions; the public log is at `GET /moderation`.

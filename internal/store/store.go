@@ -246,6 +246,12 @@ func (t Tx) InsertStatement(ctx context.Context, st Statement) error {
 	return err
 }
 
+// MarkDeleted records that the author deleted the statement.
+func (t Tx) MarkDeleted(ctx context.Context, address string, at time.Time) error {
+	_, err := t.tx.ExecContext(ctx, `update statements set deleted_at = ?2 where address = ?1`, address, at.UTC())
+	return err
+}
+
 // StatementPosition returns root and depth of a statement, to place its children.
 func (t Tx) StatementPosition(ctx context.Context, address string) (root string, depth int, err error) {
 	err = t.tx.QueryRowContext(ctx, `select root, depth from statements where address = ?1`, address).Scan(&root, &depth)

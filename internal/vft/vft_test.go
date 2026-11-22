@@ -236,6 +236,17 @@ func TestVoteTransactions(t *testing.T) {
 	}
 }
 
+func TestParseDeleteStatement(t *testing.T) {
+	body := cell.BeginCell().MustStoreUInt(OpDeleteStatement, 32).EndCell()
+	msg, err := ParseMessage(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := msg.(DeleteStatement); !ok {
+		t.Errorf("got %T, want DeleteStatement", msg)
+	}
+}
+
 func TestParseMessageRejectsUnknown(t *testing.T) {
 	unknown := cell.BeginCell().MustStoreUInt(0x12345678, 32).EndCell()
 	if _, err := ParseMessage(unknown); err != ErrUnknownMessage {

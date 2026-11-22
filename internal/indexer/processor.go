@@ -154,6 +154,10 @@ func (p *Processor) applyStatement(ctx context.Context, dbtx store.Tx, c *store.
 		ch.added = append(ch.added, vote)
 		return dbtx.InsertContract(ctx, vote)
 
+	case vft.DeleteStatement:
+		// the contract accepts it only from the author and only without arguments
+		return dbtx.MarkDeleted(ctx, c.Address, txTime(tx))
+
 	case vft.Donate:
 		// the whole message value minus fees goes to the author in a single payout
 		if len(tx.Out) != 1 {

@@ -42,9 +42,14 @@ type statementRow struct {
 	Hidden    bool
 	Reason    *string
 	HiddenAt  *time.Time
+	Deleted   bool
+	// no argument was ever created under it, so the author may delete it. Counted
+	// from the contract counters: hidden and deleted arguments still count.
+	Deletable bool
 }
 
-const statementColumns = `address, root, parent, depth, idx, pro, author, text, url, created_at, hidden, hidden_reason, hidden_at`
+const statementColumns = `address, root, parent, depth, idx, pro, author, text, url, created_at, hidden, hidden_reason, hidden_at, deleted_at is not null,
+	coalesce((select c.next_pro + c.next_con from contracts c where c.address = statements.address), 0) = 0`
 
 func scanStatements(ctx context.Context, db *sql.DB, query string, args ...any) ([]statementRow, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -56,7 +61,7 @@ func scanStatements(ctx context.Context, db *sql.DB, query string, args ...any) 
 	var list []statementRow
 	for rows.Next() {
 		var s statementRow
-		err = rows.Scan(&s.Address, &s.Root, &s.Parent, &s.Depth, &s.Idx, &s.Pro, &s.Author, &s.Text, &s.URL, &s.CreatedAt, &s.Hidden, &s.Reason, &s.HiddenAt)
+		err = rows.Scan(&s.Address, &s.Root, &s.Parent, &s.Depth, &s.Idx, &s.Pro, &s.Author, &s.Text, &s.URL, &s.CreatedAt, &s.Hidden, &s.Reason, &s.HiddenAt, &s.Deleted, &s.Deletable)
 		if err != nil {
 			return nil, err
 		}
@@ -82,16 +87,16 @@ func (r reader) statement(ctx context.Context, address string) (statementRow, er
 }
 
 func (r reader) roots(ctx context.Context) ([]statementRow, error) {
-	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where depth = 0 and not hidden`)
+	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where depth = 0 and not hidden and deleted_at is null`)
 }
 
 func (r reader) children(ctx context.Context, parents []string) ([]statementRow, error) {
 	return scanStatements(ctx, r.db,
-		`select `+statementColumns+` from statements where parent in (select value from json_each(?1)) and not hidden order by idx`, list(parents))
+		`select `+statementColumns+` from statements where parent in (select value from json_each(?1)) and not hidden and deleted_at is null order by idx`, list(parents))
 }
 
 func (r reader) byAuthor(ctx context.Context, author string) ([]statementRow, error) {
-	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where author = ?1 order by created_lt desc`, author)
+	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where author = ?1 and deleted_at is null order by created_lt desc`, author)
 }
 
 func (r reader) hidden(ctx context.Context) ([]statementRow, error) {

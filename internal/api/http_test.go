@@ -277,3 +277,102 @@ func TestModerationAndErrors(t *testing.T) {
 	// raw addresses are accepted too
 	get(t, f, "/statements/"+f.root, 200, nil)
 }
+
+func TestDeletedStatement(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+
+	// a third pro argument: alice votes for it, then the author deletes it
+	p3 := addr("p3")
+	err := f.st.Apply(ctx, func(tx store.Tx) error {
+		if err := tx.InsertContract(ctx, &store.Contract{Address: p3, Kind: store.KindStatement, Parent: f.root, Idx: 2, Pro: true}); err != nil {
+			return err
+		}
+		if err := tx.InsertStatement(ctx, store.Statement{Address: p3, Root: f.root, Parent: f.root, Depth: 1, Idx: 2, Pro: true,
+			Author: f.author, Text: "Hasty", CreatedAt: day(6), CreatedLT: 1000}); err != nil {
+			return err
+		}
+		if err := tx.InsertEvent(ctx, store.Event{Account: addr("vote-p3"), LT: 1001, TxHash: []byte{1}, Time: day(6),
+			Kind: store.EventVoteAdded, Statement: p3, Wallet: f.alice, Amount: nano(4)}); err != nil {
+			return err
+		}
+		return tx.MarkDeleted(ctx, p3, day(6.5))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the root has arguments; p1 has none
+	if err = f.st.Apply(ctx, func(tx store.Tx) error {
+		return tx.UpdateCounters(ctx, &store.Contract{Address: f.root, NextPro: 3, NextCon: 2})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var flags struct {
+		Statement struct{ Deletable bool }
+		Pro       []struct {
+			Address   string
+			Deletable bool
+		}
+	}
+	get(t, f, "/statements/"+friendly(f.root, false), 200, &flags)
+	if flags.Statement.Deletable {
+		t.Error("a statement with arguments must not be deletable")
+	}
+	for _, p := range flags.Pro {
+		if !p.Deletable {
+			t.Errorf("an argument without answers must be deletable: %s", p.Address)
+		}
+	}
+
+	var gone struct{ Deleted bool }
+	get(t, f, "/statements/"+friendly(p3, false), 410, &gone)
+	if !gone.Deleted {
+		t.Errorf("deleted statement: %+v", gone)
+	}
+
+	// it is not an argument of the root anymore
+	var detail struct {
+		Statement struct{ Arguments struct{ Pro int } }
+		Pro       []struct{ Address string }
+	}
+	get(t, f, "/statements/"+friendly(f.root, false), 200, &detail)
+	if detail.Statement.Arguments.Pro != 2 || len(detail.Pro) != 2 {
+		t.Errorf("root still counts the deleted argument: %+v", detail)
+	}
+	for _, p := range detail.Pro {
+		if p.Address == friendly(p3, false) {
+			t.Error("deleted argument is listed")
+		}
+	}
+
+	// the author's profile doesn't list it
+	var mine struct{ Statements []struct{ Address string } }
+	get(t, f, "/wallets/"+friendly(f.author, true)+"/statements", 200, &mine)
+	for _, s := range mine.Statements {
+		if s.Address == friendly(p3, false) {
+			t.Error("deleted statement in the author's list")
+		}
+	}
+
+	// but alice still sees her vote, without the text, to take the money back
+	var votes struct {
+		Votes []struct {
+			Statement, Text, Amount string
+			Deleted                 bool
+		}
+	}
+	get(t, f, "/wallets/"+friendly(f.alice, true)+"/votes", 200, &votes)
+	found := false
+	for _, v := range votes.Votes {
+		if v.Statement == friendly(p3, false) {
+			found = true
+			if !v.Deleted || v.Text != "" || v.Amount != nano(4).String() {
+				t.Errorf("vote on a deleted statement: %+v", v)
+			}
+		}
+	}
+	if !found {
+		t.Error("vote on a deleted statement is missing")
+	}
+}

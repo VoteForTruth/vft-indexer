@@ -19,6 +19,7 @@ const (
 	OpAddVote            uint64 = 0x56f40006
 	OpWithdraw           uint64 = 0x56f40007
 	OpWithdrawAll        uint64 = 0x56f40008
+	OpDeleteStatement    uint64 = 0x56f40009
 	OpTextComment        uint64 = 0x00000000
 )
 
@@ -60,6 +61,9 @@ type Withdraw struct {
 }
 
 type WithdrawAll struct{}
+
+// DeleteStatement: the author deletes a statement that has no arguments.
+type DeleteStatement struct{}
 
 // Donate is the "donate" text comment.
 type Donate struct{}
@@ -114,6 +118,8 @@ func ParseMessage(body *cell.Cell) (any, error) {
 		msg = Withdraw{Amount: amount}
 	case OpWithdrawAll:
 		msg = WithdrawAll{}
+	case OpDeleteStatement:
+		msg = DeleteStatement{}
 	case OpTextComment:
 		var text string
 		text, err = s.LoadStringSnake()
