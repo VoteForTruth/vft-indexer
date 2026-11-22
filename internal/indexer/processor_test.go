@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"sort"
@@ -20,9 +21,10 @@ import (
 
 // The fixtures are real testnet transactions of the full scenario, see internal/vft/testdata.
 var (
-	wallet = address.MustParseAddr("0QDYVkbXA-Iix_5RcZpa2RSFRnU_U5ik1GA9pP-RpytyST7z")
-	master = address.MustParseAddr("kQAtLOtQSvcqzpgpgmRoymv4BN5w5lcgF1VN6Ob0F4J0STiU")
-	root   = address.MustParseAddr("kQC-MCQhctLfNy4pUxT6kpeugXtaO3ONJ-XazF-ptjHfuEQ5")
+	wallet  = address.MustParseAddr("0QDYVkbXA-Iix_5RcZpa2RSFRnU_U5ik1GA9pP-RpytyST7z")
+	master  = address.MustParseAddr("EQD8W1gEgzOT3CFO2XFe5DLIVxWWTzdalBzE1d-4jQBCT_mP")
+	root    = address.MustParseAddr("EQAp_01uq2jzDZpTU9Pr5LI69KuQ-So0rQzOgJbFTbrdc0f4")
+	deleted = address.MustParseAddr("EQC_Y9v1cteZt0h5FjieQT_5bGrei9DKEkLjo6tObC4uiyKV")
 )
 
 func testStore(t *testing.T) *store.Store {
@@ -35,7 +37,7 @@ func scenarioTxs(t *testing.T) []vft.Tx {
 	t.Helper()
 
 	var all []vft.Tx
-	for _, name := range []string{"master", "root", "arg_pro", "arg_con", "vote"} {
+	for _, name := range []string{"master", "root", "arg_pro", "arg_con", "arg_deleted", "vote", "vote_deleted"} {
 		raw, err := os.ReadFile("../vft/testdata/" + name + ".json")
 		if err != nil {
 			t.Fatal(err)
@@ -94,8 +96,9 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 	txs := scenarioTxs(t)
 	applyAll(t, p, txs)
 
-	// the tree
-	rows, err := st.DB().QueryContext(ctx, `select address, root, depth, pro, author, text, coalesce(url, '') from statements order by depth, pro desc`)
+	// the tree, the deleted argument included (it stays for its voters)
+	rows, err := st.DB().QueryContext(ctx, `select address, root, depth, pro, author, text, coalesce(url, ''), deleted_at is not null
+		from statements order by depth, pro desc, idx`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,31 +108,53 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 		pro           bool
 		author, text  string
 		url           string
+		deleted       bool
 	}
 	var got []row
 	for rows.Next() {
 		var r row
-		if err = rows.Scan(&r.address, &r.root, &r.depth, &r.pro, &r.author, &r.text, &r.url); err != nil {
+		if err = rows.Scan(&r.address, &r.root, &r.depth, &r.pro, &r.author, &r.text, &r.url, &r.deleted); err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, r)
 	}
-	if len(got) != 3 {
-		t.Fatalf("expected 3 statements, got %+v", got)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 statements, got %+v", got)
 	}
-	if got[0].address != Raw(root) || got[0].depth != 0 || got[0].text != "Тестовый вопрос" || got[0].url != "https://example.com" {
+	// the current link is the last one set by the author
+	if got[0].address != Raw(root) || got[0].depth != 0 || got[0].text != "Тестовое утверждение" || got[0].url != "https://web.archive.org" {
 		t.Errorf("root: %+v", got[0])
 	}
-	if got[1].text != "Аргумент за" || !got[1].pro || got[1].depth != 1 || got[1].root != Raw(root) {
+	if got[1].text != "Однозначно да" || !got[1].pro || got[1].deleted || got[1].root != Raw(root) {
 		t.Errorf("pro argument: %+v", got[1])
 	}
-	if got[2].text != "Аргумент против" || got[2].pro || got[2].depth != 1 || got[2].root != Raw(root) {
-		t.Errorf("con argument: %+v", got[2])
+	if got[2].address != Raw(deleted) || got[2].text != "Delete me" || !got[2].pro || !got[2].deleted {
+		t.Errorf("deleted argument: %+v", got[2])
+	}
+	if got[3].text != "Нафиг" || got[3].pro || got[3].depth != 1 || got[3].deleted {
+		t.Errorf("con argument: %+v", got[3])
 	}
 	for _, r := range got {
 		if r.author != Raw(wallet) {
 			t.Errorf("author of %s: %s", r.text, r.author)
 		}
+	}
+
+	// the public history of the root's link: created without one, replaced twice
+	var history []string
+	hRows, err := st.DB().QueryContext(ctx, `select coalesce(url, '-') from url_history where statement = ?1 order by lt`, Raw(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for hRows.Next() {
+		var u string
+		if err = hRows.Scan(&u); err != nil {
+			t.Fatal(err)
+		}
+		history = append(history, u)
+	}
+	if fmt.Sprint(history) != "[- https://example.com https://web.archive.org]" {
+		t.Errorf("link history %v", history)
 	}
 
 	// the events
@@ -143,31 +168,34 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 		if err = evRows.Scan(&kind, &statement, &w, &amount); err != nil {
 			t.Fatal(err)
 		}
-		if statement != Raw(root) || w != Raw(wallet) {
-			t.Errorf("%s: statement %s wallet %s", kind, statement, w)
+		if w != Raw(wallet) {
+			t.Errorf("%s: wallet %s", kind, w)
 		}
 		if kind == string(store.EventDonation) {
 			amount = "donation" // the exact value depends on fees
 		}
-		events = append(events, kind+":"+amount)
+		on := "root"
+		if statement == Raw(deleted) {
+			on = "deleted"
+		} else if statement != Raw(root) {
+			on = statement
+		}
+		events = append(events, on+" "+kind+":"+amount)
 	}
 	expected := []string{
-		"vote_added:500000000",
-		"vote_added:200000000",
-		"vote_withdrawn:300000000",
-		"vote_revoked_all:",
-		"donation:donation",
+		"deleted vote_added:100000000",
+		"deleted vote_revoked_all:",
+		"root vote_added:500000000",
+		"root vote_added:200000000",
+		"root vote_withdrawn:300000000",
+		"root vote_revoked_all:",
+		"root donation:donation",
 	}
-	if len(events) != len(expected) {
-		t.Fatalf("events %v, expected %v", events, expected)
-	}
-	for i := range expected {
-		if events[i] != expected[i] {
-			t.Fatalf("events %v, expected %v", events, expected)
-		}
+	if fmt.Sprint(events) != fmt.Sprint(expected) {
+		t.Fatalf("events\n%v\nexpected\n%v", events, expected)
 	}
 
-	// counters mirror the contracts
+	// counters mirror the contracts: a deleted argument still counts
 	contracts, err := st.LoadContracts(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -175,11 +203,11 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 	if m := contracts[Raw(master)]; m.NextIdx != 1 {
 		t.Errorf("master next_idx %d", m.NextIdx)
 	}
-	if r := contracts[Raw(root)]; r.NextPro != 1 || r.NextCon != 1 {
+	if r := contracts[Raw(root)]; r.NextPro != 2 || r.NextCon != 1 {
 		t.Errorf("root counters %d/%d", r.NextPro, r.NextCon)
 	}
-	if len(contracts) != 5 {
-		t.Errorf("expected master, 3 statements and 1 vote, got %d contracts", len(contracts))
+	if len(contracts) != 7 {
+		t.Errorf("expected master, 4 statements and 2 votes, got %d contracts", len(contracts))
 	}
 
 	// replaying the same transactions (e.g. after a crash) changes nothing
@@ -192,7 +220,7 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 	if err = st.DB().QueryRowContext(ctx, `select (select count(*) from events) + (select count(*) from statements)`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 8 {
+	if count != 11 {
 		t.Errorf("replay duplicated data: %d rows", count)
 	}
 }
