@@ -210,7 +210,9 @@ func connect(ctx context.Context, configURL, proof string, log *slog.Logger) (to
 		log.Info("verifying the proof chain from the config block, may take about a minute")
 	}
 
-	api := client.WithTimeout(30 * time.Second)
+	// A lite server that hangs must not stall the scanner, which processes blocks
+	// in order: give each request 5s, then retry it on the next server of the pool.
+	api := client.WithRetryTimeout(3, 5*time.Second)
 	if _, err = api.GetMasterchainInfo(ctx); err != nil {
 		return nil, fmt.Errorf("masterchain info: %w", err)
 	}
