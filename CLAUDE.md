@@ -2,13 +2,13 @@
 
 @../vft-meta/CLAUDE.md
 
-Go, tonutils-go (lite-серверы напрямую), Postgres. Описание API и устройства — в `README.md`.
+Go, tonutils-go (lite-серверы напрямую), SQLite (`modernc.org/sqlite`, без cgo). Описание API и устройства — в `README.md`.
 
 ## Команды
 
 ```bash
-make build && ./vft-indexer -network testnet -master <VftMaster> -http 127.0.0.1:8080
-make test                       # нужна локальная БД vft_indexer_test (или VFT_TEST_DSN)
+make build && ./vft-indexer -network testnet -master <VftMaster> -http 127.0.0.1:8080   # база: ./vft-indexer.db
+make test                       # каждый тест — свой файл SQLite во временном каталоге
 make contracts                  # скопировать код контрактов из ../vft-contract/build
 ./vft-indexer hide <statement> "<reason>"   # модерация; unhide <statement>
 ```
@@ -25,9 +25,13 @@ make contracts                  # скопировать код контракт
   (`internal/weight`, `internal/api`). Применение транзакции идемпотентно (`processed_txs`).
 - `internal/vft/testdata` — реальные транзакции testnet всего сценария; тесты разбора и
   обработчика идут на них.
-- Тестовые пакеты работают в отдельных схемах Postgres (`internal/store/storetest`) —
-  так они не мешают друг другу при параллельном запуске.
+- **SQLite, один писатель.** Транзакции применяет только сканер, по порядку; API читает
+  параллельно (WAL). Пишущие транзакции берут блокировку сразу (`_txlock=immediate`),
+  `hide`/`unhide` из другого процесса ждут `busy_timeout`. Время хранится текстом в UTC —
+  только так сравнения `time >= ?` верны; передавать в запросы `.UTC()`.
+- Суммы — десятичный текст в нано-единицах (точно, без переполнения); складываются в Go
+  (`math/big`), не в SQL. Списков-параметров в SQLite нет — `in (select value from json_each(?))`.
 - Запрос к lite-серверу: 5 секунд, затем следующий сервер пула (`WithRetryTimeout`);
   иначе один зависший сервер стопорит упорядоченный сканер.
-- В Dockerfile/docker-compose есть заготовка, но на сервере `nous` Docker не используется —
-  деплой по правилам Nous (systemd, `/opt`, `/etc`, `/var/lib`).
+- Dockerfile — заготовка, на сервере `nous` Docker не используется: деплой по правилам Nous
+  (systemd, `/opt`, `/etc`, `/var/lib`).

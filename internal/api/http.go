@@ -5,6 +5,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -14,7 +15,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xssnick/tonutils-go/address"
 
 	"github.com/VoteForTruth/vft-indexer/internal/store"
@@ -27,8 +27,8 @@ type Server struct {
 	now     func() time.Time // weights depend on time; tests pin it
 }
 
-func New(pool *pgxpool.Pool, testnet bool, log *slog.Logger, now func() time.Time) *Server {
-	return &Server{read: reader{pool: pool}, testnet: testnet, log: log, now: now}
+func New(db *sql.DB, testnet bool, log *slog.Logger, now func() time.Time) *Server {
+	return &Server{read: reader{db: db}, testnet: testnet, log: log, now: now}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -481,11 +481,11 @@ func (s *Server) walletDonations(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	received, err := s.read.donations(r.Context(), "s.author = $1", wallet)
+	received, err := s.read.donations(r.Context(), "s.author = ?1", wallet)
 	if err != nil {
 		return nil, err
 	}
-	sent, err := s.read.donations(r.Context(), "e.wallet = $1", wallet)
+	sent, err := s.read.donations(r.Context(), "e.wallet = ?1", wallet)
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +516,7 @@ func (s *Server) moderation(r *http.Request) (any, error) {
 // GET /health: the last indexed masterchain block.
 func (s *Server) health(r *http.Request) (any, error) {
 	var seqno int64
-	err := s.read.pool.QueryRow(r.Context(), `select coalesce((select mc_seqno from scan_cursor where id = 1), 0)`).Scan(&seqno)
+	err := s.read.db.QueryRowContext(r.Context(), `select coalesce((select mc_seqno from scan_cursor where id = 1), 0)`).Scan(&seqno)
 	if err != nil {
 		return nil, err
 	}

@@ -2,11 +2,11 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"math/big"
 	"sort"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/VoteForTruth/vft-indexer/internal/store"
 	"github.com/VoteForTruth/vft-indexer/internal/weight"
@@ -15,7 +15,17 @@ import (
 // reader builds the read model from statements and events. Weights depend on
 // the current time, so they are computed on request rather than stored.
 type reader struct {
-	pool *pgxpool.Pool
+	db *sql.DB
+}
+
+// list encodes values for `in (select value from json_each(?))` — SQLite has
+// no array parameters.
+func list(values []string) string {
+	if values == nil {
+		values = []string{}
+	}
+	b, _ := json.Marshal(values)
+	return string(b)
 }
 
 type statementRow struct {
@@ -36,8 +46,8 @@ type statementRow struct {
 
 const statementColumns = `address, root, parent, depth, idx, pro, author, text, url, created_at, hidden, hidden_reason, hidden_at`
 
-func scanStatements(ctx context.Context, pool *pgxpool.Pool, query string, args ...any) ([]statementRow, error) {
-	rows, err := pool.Query(ctx, query, args...)
+func scanStatements(ctx context.Context, db *sql.DB, query string, args ...any) ([]statementRow, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,31 +71,31 @@ func scanStatements(ctx context.Context, pool *pgxpool.Pool, query string, args 
 }
 
 func (r reader) statement(ctx context.Context, address string) (statementRow, error) {
-	list, err := scanStatements(ctx, r.pool, `select `+statementColumns+` from statements where address = $1`, address)
+	rows, err := scanStatements(ctx, r.db, `select `+statementColumns+` from statements where address = ?1`, address)
 	if err != nil {
 		return statementRow{}, err
 	}
-	if len(list) == 0 {
+	if len(rows) == 0 {
 		return statementRow{}, store.ErrNotFound
 	}
-	return list[0], nil
+	return rows[0], nil
 }
 
 func (r reader) roots(ctx context.Context) ([]statementRow, error) {
-	return scanStatements(ctx, r.pool, `select `+statementColumns+` from statements where depth = 0 and not hidden`)
+	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where depth = 0 and not hidden`)
 }
 
 func (r reader) children(ctx context.Context, parents []string) ([]statementRow, error) {
-	return scanStatements(ctx, r.pool,
-		`select `+statementColumns+` from statements where parent = any($1) and not hidden order by idx`, parents)
+	return scanStatements(ctx, r.db,
+		`select `+statementColumns+` from statements where parent in (select value from json_each(?1)) and not hidden order by idx`, list(parents))
 }
 
 func (r reader) byAuthor(ctx context.Context, author string) ([]statementRow, error) {
-	return scanStatements(ctx, r.pool, `select `+statementColumns+` from statements where author = $1 order by created_lt desc`, author)
+	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where author = ?1 order by created_lt desc`, author)
 }
 
 func (r reader) hidden(ctx context.Context) ([]statementRow, error) {
-	return scanStatements(ctx, r.pool, `select `+statementColumns+` from statements where hidden order by hidden_at desc`)
+	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where hidden order by hidden_at desc`)
 }
 
 // tally is the folded state of all votes and donations of one statement.
@@ -101,9 +111,9 @@ func (r reader) tallies(ctx context.Context, statements []string) (map[string]*t
 		result[s] = &tally{votes: map[string]*weight.Vote{}, donations: new(big.Int)}
 	}
 
-	rows, err := r.pool.Query(ctx, `
-		select statement, wallet, kind, coalesce(amount::text, '0'), time
-		from events where statement = any($1) order by lt`, statements)
+	rows, err := r.db.QueryContext(ctx, `
+		select statement, wallet, kind, coalesce(amount, '0'), time
+		from events where statement in (select value from json_each(?1)) order by lt`, list(statements))
 	if err != nil {
 		return nil, err
 	}
@@ -143,9 +153,9 @@ func (r reader) tallies(ctx context.Context, statements []string) (map[string]*t
 
 // activity counts events in each tree (by root) since `since`.
 func (r reader) activity(ctx context.Context, since time.Time) (map[string]int, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.QueryContext(ctx, `
 		select s.root, count(*) from events e join statements s on s.address = e.statement
-		where e.time >= $1 group by s.root`, since)
+		where e.time >= ?1 group by s.root`, since.UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -165,21 +175,21 @@ func (r reader) activity(ctx context.Context, since time.Time) (map[string]int, 
 
 // walletVotes returns statements with events of the wallet.
 func (r reader) walletStatements(ctx context.Context, wallet string, kinds []string) ([]string, error) {
-	rows, err := r.pool.Query(ctx, `select distinct statement from events where wallet = $1 and kind = any($2)`, wallet, kinds)
+	rows, err := r.db.QueryContext(ctx, `select distinct statement from events where wallet = ?1 and kind in (select value from json_each(?2))`, wallet, list(kinds))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var list []string
+	var result []string
 	for rows.Next() {
 		var s string
 		if err = rows.Scan(&s); err != nil {
 			return nil, err
 		}
-		list = append(list, s)
+		result = append(result, s)
 	}
-	return list, rows.Err()
+	return result, rows.Err()
 }
 
 type donationRow struct {
@@ -190,8 +200,8 @@ type donationRow struct {
 }
 
 func (r reader) donations(ctx context.Context, where string, arg string) ([]donationRow, error) {
-	rows, err := r.pool.Query(ctx, `
-		select e.statement, e.wallet, e.amount::text, e.time
+	rows, err := r.db.QueryContext(ctx, `
+		select e.statement, e.wallet, e.amount, e.time
 		from events e join statements s on s.address = e.statement
 		where e.kind = 'donation' and `+where+` order by e.lt desc`, arg)
 	if err != nil {

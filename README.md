@@ -1,6 +1,6 @@
 # vft-indexer
 
-Indexer of the **Vote For Truth** contracts ([vft-contract](https://github.com/VoteForTruth/vft-contract)): scans TON blocks, stores the history of statements, votes and donations in Postgres, and serves it as a read-only JSON API for the Mini App.
+Indexer of the **Vote For Truth** contracts ([vft-contract](https://github.com/VoteForTruth/vft-contract)): scans TON blocks, stores the history of statements, votes and donations in SQLite, and serves it as a read-only JSON API for the Mini App.
 
 The indexer never sends transactions: the app talks to the contracts directly through TON Connect and only reads from here.
 
@@ -22,8 +22,8 @@ The result of a dispute is the weight of its direct pro arguments vs its direct 
 Hidden statements are not returned by the API (the contract is not affected). Only illegal content and spam are hidden, never opinions; the public log is at `GET /moderation`.
 
 ```bash
-vft-indexer -dsn ... hide <statement> "<reason>"
-vft-indexer -dsn ... unhide <statement>
+vft-indexer -db ... hide <statement> "<reason>"
+vft-indexer -db ... unhide <statement>
 ```
 
 ## API
@@ -44,19 +44,20 @@ Amounts and weights are strings with nanotons. Contract addresses are bounceable
 ## Running
 
 ```bash
-createdb vft_indexer
 make build
-./vft-indexer -network testnet -master <VftMaster address>      # API on :8080
+./vft-indexer -network testnet -master <VftMaster address>      # API on :8080, data in ./vft-indexer.db
 ```
 
-On the first run the start block is found from the master deploy time. Settings are flags or env vars: `VFT_NETWORK`, `VFT_MASTER`, `VFT_DSN`, `VFT_HTTP`. With Docker: `VFT_MASTER=<address> docker compose up -d`.
+On the first run the start block is found from the master deploy time. Settings are flags or env vars: `VFT_NETWORK`, `VFT_MASTER`, `VFT_DB` (SQLite file), `VFT_HTTP`.
+
+**Storage.** One SQLite file (WAL mode, pure-Go driver `modernc.org/sqlite`, no cgo). There is one writer — the scanner applies transactions in order — and the API reads concurrently. The chain is the source of truth, so a lost database is rebuilt by rescanning from the master deploy. Back up with `sqlite3 vft-indexer.db ".backup copy.db"` (a plain copy of a live WAL database may be inconsistent).
 
 Mainnet history older than what public lite servers keep needs an archive lite server.
 
 ## Development
 
 ```bash
-make test          # needs a local Postgres: createdb vft_indexer_test (or set VFT_TEST_DSN)
+make test          # each test gets its own SQLite file in a temp dir
 make contracts     # after changing the contracts: copy build artifacts from ../vft-contract
 ```
 

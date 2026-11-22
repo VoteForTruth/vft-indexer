@@ -36,7 +36,7 @@ var configURLs = map[string]string{
 
 type config struct {
 	network    string
-	dsn        string
+	db         string
 	master     string
 	startSeqno uint
 	proof      string
@@ -48,7 +48,7 @@ type config struct {
 func main() {
 	var cfg config
 	flag.StringVar(&cfg.network, "network", envOr("VFT_NETWORK", "testnet"), "testnet or mainnet")
-	flag.StringVar(&cfg.dsn, "dsn", envOr("VFT_DSN", "postgres://localhost/vft_indexer?sslmode=disable"), "Postgres connection string")
+	flag.StringVar(&cfg.db, "db", envOr("VFT_DB", "vft-indexer.db"), "SQLite database file")
 	flag.StringVar(&cfg.master, "master", os.Getenv("VFT_MASTER"), "VftMaster address")
 	flag.UintVar(&cfg.startSeqno, "start-seqno", 0, "masterchain seqno to start from on the first run (default: found from the master deploy)")
 	flag.StringVar(&cfg.proof, "proof", "fast", "lite server proof checks: fast or unsafe")
@@ -99,7 +99,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) error {
 		return err
 	}
 
-	st, err := store.Open(ctx, cfg.dsn)
+	st, err := store.Open(ctx, cfg.db)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) error {
 	if cfg.httpAddr != "" {
 		srv := &http.Server{
 			Addr:              cfg.httpAddr,
-			Handler:           api.New(st.Pool(), cfg.network == "testnet", log, time.Now).Handler(),
+			Handler:           api.New(st.DB(), cfg.network == "testnet", log, time.Now).Handler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		go func() {
@@ -172,7 +172,7 @@ func moderate(ctx context.Context, cfg config, args []string) error {
 		return fmt.Errorf("statement address: %w", err)
 	}
 
-	st, err := store.Open(ctx, cfg.dsn)
+	st, err := store.Open(ctx, cfg.db)
 	if err != nil {
 		return err
 	}

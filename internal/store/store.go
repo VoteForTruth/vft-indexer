@@ -1,8 +1,9 @@
-// Package store keeps indexed data in Postgres.
+// Package store keeps indexed data in SQLite.
 package store
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -10,9 +11,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed migrations/*.sql
@@ -22,34 +21,57 @@ var migrationsFS embed.FS
 var ErrNotFound = errors.New("not found")
 
 type Store struct {
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
-func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+// Open opens the SQLite database file at path, creating it if needed.
+//
+// One process writes: the scanner applies transactions one by one; moderation
+// commands from another process wait on busy_timeout. WAL lets the API read
+// while the scanner writes. Write transactions take the lock up front
+// (_txlock=immediate), so a reader never has to be upgraded to a writer midway.
+// Times are written as "2006-01-02 15:04:05.999999999-07:00" (_time_format);
+// the store always passes UTC, so they also compare correctly as text.
+func Open(ctx context.Context, path string) (*Store, error) {
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)" +
+		"&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_time_format=sqlite&_txlock=immediate"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
+		return nil, fmt.Errorf("open: %w", err)
 	}
 
-	if err = pool.Ping(ctx); err != nil {
-		pool.Close()
+	if err = db.PingContext(ctx); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 
-	return &Store{pool: pool}, nil
+	return &Store{db: db}, nil
 }
 
 func (s *Store) Close() {
-	s.pool.Close()
+	s.db.Close()
 }
 
-func (s *Store) Pool() *pgxpool.Pool {
-	return s.pool
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
+// inTx runs fn in a transaction, committing on success.
+func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err = fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // Migrate applies migrations/*.sql in name order, each once.
 func (s *Store) Migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `create table if not exists schema_migrations (name text primary key)`)
+	_, err := s.db.ExecContext(ctx, `create table if not exists schema_migrations (name text primary key)`)
 	if err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
@@ -62,7 +84,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 
 	for _, e := range entries {
 		var applied bool
-		err = s.pool.QueryRow(ctx, `select exists(select 1 from schema_migrations where name = $1)`, e.Name()).Scan(&applied)
+		err = s.db.QueryRowContext(ctx, `select exists(select 1 from schema_migrations where name = ?1)`, e.Name()).Scan(&applied)
 		if err != nil {
 			return err
 		}
@@ -70,16 +92,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 			continue
 		}
 
-		sql, err := migrationsFS.ReadFile("migrations/" + e.Name())
+		script, err := migrationsFS.ReadFile("migrations/" + e.Name())
 		if err != nil {
 			return err
 		}
 
-		err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, string(sql)); err != nil {
+		err = s.inTx(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, string(script)); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `insert into schema_migrations (name) values ($1)`, e.Name())
+			_, err := tx.ExecContext(ctx, `insert into schema_migrations (name) values (?1)`, e.Name())
 			return err
 		})
 		if err != nil {
@@ -123,7 +145,7 @@ type Contract struct {
 
 // LoadContracts returns all known contracts by address.
 func (s *Store) LoadContracts(ctx context.Context) (map[string]*Contract, error) {
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.QueryContext(ctx, `
 		select address, kind, coalesce(parent, ''), coalesce(idx, 0), coalesce(pro, false),
 		       coalesce(statement, ''), coalesce(owner, ''), next_idx, next_pro, next_con
 		from contracts`)
@@ -146,12 +168,12 @@ func (s *Store) LoadContracts(ctx context.Context) (map[string]*Contract, error)
 
 // Tx is a database transaction for applying one blockchain transaction.
 type Tx struct {
-	tx pgx.Tx
+	tx *sql.Tx
 }
 
 // Apply runs fn in a database transaction.
 func (s *Store) Apply(ctx context.Context, fn func(tx Tx) error) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
 		return fn(Tx{tx: tx})
 	})
 }
@@ -159,17 +181,18 @@ func (s *Store) Apply(ctx context.Context, fn func(tx Tx) error) error {
 // MarkProcessed records a blockchain transaction as applied.
 // It returns false if it was applied before.
 func (t Tx) MarkProcessed(ctx context.Context, account string, lt uint64) (bool, error) {
-	tag, err := t.tx.Exec(ctx, `insert into processed_txs (account, lt) values ($1, $2) on conflict do nothing`, account, int64(lt))
+	res, err := t.tx.ExecContext(ctx, `insert into processed_txs (account, lt) values (?1, ?2) on conflict do nothing`, account, int64(lt))
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (t Tx) InsertContract(ctx context.Context, c *Contract) error {
-	_, err := t.tx.Exec(ctx, `
+	_, err := t.tx.ExecContext(ctx, `
 		insert into contracts (address, kind, parent, idx, pro, statement, owner)
-		values ($1, $2, nullif($3, ''), $4, $5, nullif($6, ''), nullif($7, ''))
+		values (?1, ?2, nullif(?3, ''), ?4, ?5, nullif(?6, ''), nullif(?7, ''))
 		on conflict (address) do nothing`,
 		c.Address, c.Kind, c.Parent, nullableIdx(c), nullablePro(c), c.Statement, c.Owner)
 	return err
@@ -190,7 +213,7 @@ func nullablePro(c *Contract) any {
 }
 
 func (t Tx) UpdateCounters(ctx context.Context, c *Contract) error {
-	_, err := t.tx.Exec(ctx, `update contracts set next_idx = $2, next_pro = $3, next_con = $4 where address = $1`,
+	_, err := t.tx.ExecContext(ctx, `update contracts set next_idx = ?2, next_pro = ?3, next_con = ?4 where address = ?1`,
 		c.Address, c.NextIdx, c.NextPro, c.NextCon)
 	return err
 }
@@ -215,18 +238,18 @@ type Statement struct {
 }
 
 func (t Tx) InsertStatement(ctx context.Context, st Statement) error {
-	_, err := t.tx.Exec(ctx, `
+	_, err := t.tx.ExecContext(ctx, `
 		insert into statements (address, root, parent, depth, idx, pro, author, text, url, created_at, created_lt)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
 		on conflict (address) do nothing`,
-		st.Address, st.Root, st.Parent, st.Depth, st.Idx, st.Pro, st.Author, st.Text, st.URL, st.CreatedAt, int64(st.CreatedLT))
+		st.Address, st.Root, st.Parent, st.Depth, st.Idx, st.Pro, st.Author, st.Text, st.URL, st.CreatedAt.UTC(), int64(st.CreatedLT))
 	return err
 }
 
 // StatementPosition returns root and depth of a statement, to place its children.
 func (t Tx) StatementPosition(ctx context.Context, address string) (root string, depth int, err error) {
-	err = t.tx.QueryRow(ctx, `select root, depth from statements where address = $1`, address).Scan(&root, &depth)
-	if errors.Is(err, pgx.ErrNoRows) {
+	err = t.tx.QueryRowContext(ctx, `select root, depth from statements where address = ?1`, address).Scan(&root, &depth)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", 0, ErrNotFound
 	}
 	return root, depth, err
@@ -257,10 +280,10 @@ func (t Tx) InsertEvent(ctx context.Context, e Event) error {
 	if e.Amount != nil {
 		amount = e.Amount.String()
 	}
-	_, err := t.tx.Exec(ctx, `
+	_, err := t.tx.ExecContext(ctx, `
 		insert into events (account, lt, tx_hash, time, kind, statement, wallet, amount)
-		values ($1, $2, $3, $4, $5, $6, $7, $8::numeric)`,
-		e.Account, int64(e.LT), e.TxHash, e.Time, e.Kind, e.Statement, e.Wallet, amount)
+		values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+		e.Account, int64(e.LT), e.TxHash, e.Time.UTC(), e.Kind, e.Statement, e.Wallet, amount)
 	return err
 }
 
@@ -271,16 +294,16 @@ func (t Tx) InsertEvent(ctx context.Context, e Event) error {
 // Cursor returns the last fully processed masterchain seqno.
 func (s *Store) Cursor(ctx context.Context) (uint32, error) {
 	var seqno int64
-	err := s.pool.QueryRow(ctx, `select mc_seqno from scan_cursor where id = 1`).Scan(&seqno)
-	if errors.Is(err, pgx.ErrNoRows) {
+	err := s.db.QueryRowContext(ctx, `select mc_seqno from scan_cursor where id = 1`).Scan(&seqno)
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
 	return uint32(seqno), err
 }
 
 func (s *Store) SetCursor(ctx context.Context, seqno uint32) error {
-	_, err := s.pool.Exec(ctx, `
-		insert into scan_cursor (id, mc_seqno) values (1, $1)
+	_, err := s.db.ExecContext(ctx, `
+		insert into scan_cursor (id, mc_seqno) values (1, ?1)
 		on conflict (id) do update set mc_seqno = excluded.mc_seqno`, int64(seqno))
 	return err
 }
@@ -292,17 +315,22 @@ func (s *Store) SetCursor(ctx context.Context, seqno uint32) error {
 // SetHidden hides a statement from the API (or shows it again). The contract
 // itself is not affected. Returns ErrNotFound for an unknown statement.
 func (s *Store) SetHidden(ctx context.Context, address string, hidden bool, reason string) error {
-	var tag pgconn.CommandTag
+	var res sql.Result
 	var err error
 	if hidden {
-		tag, err = s.pool.Exec(ctx, `update statements set hidden = true, hidden_reason = $2, hidden_at = now() where address = $1`, address, reason)
+		res, err = s.db.ExecContext(ctx, `update statements set hidden = true, hidden_reason = ?2, hidden_at = ?3 where address = ?1`,
+			address, reason, time.Now().UTC())
 	} else {
-		tag, err = s.pool.Exec(ctx, `update statements set hidden = false, hidden_reason = null, hidden_at = null where address = $1`, address)
+		res, err = s.db.ExecContext(ctx, `update statements set hidden = false, hidden_reason = null, hidden_at = null where address = ?1`, address)
 	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil

@@ -26,7 +26,7 @@ var (
 )
 
 func testStore(t *testing.T) *store.Store {
-	return storetest.Open(t, "indexer_test")
+	return storetest.Open(t)
 }
 
 // scenarioTxs returns all fixture transactions in global logical time order,
@@ -95,7 +95,7 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 	applyAll(t, p, txs)
 
 	// the tree
-	rows, err := st.Pool().Query(ctx, `select address, root, depth, pro, author, text, coalesce(url, '') from statements order by depth, pro desc`)
+	rows, err := st.DB().QueryContext(ctx, `select address, root, depth, pro, author, text, coalesce(url, '') from statements order by depth, pro desc`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 	}
 
 	// the events
-	evRows, err := st.Pool().Query(ctx, `select kind, statement, wallet, coalesce(amount::text, '') from events order by lt`)
+	evRows, err := st.DB().QueryContext(ctx, `select kind, statement, wallet, coalesce(amount, '') from events order by lt`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestProcessorBuildsTreeAndEvents(t *testing.T) {
 	}
 	applyAll(t, p2, txs)
 	var count int
-	if err = st.Pool().QueryRow(ctx, `select (select count(*) from events) + (select count(*) from statements)`).Scan(&count); err != nil {
+	if err = st.DB().QueryRowContext(ctx, `select (select count(*) from events) + (select count(*) from statements)`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 8 {

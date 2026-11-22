@@ -46,7 +46,7 @@ func setup(t *testing.T) fixture {
 	t.Helper()
 	ctx := context.Background()
 
-	st := storetest.Open(t, "api_test")
+	st := storetest.Open(t)
 	var err error
 
 	f := fixture{
@@ -110,7 +110,7 @@ func setup(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 
-	srv := New(st.Pool(), true, slog.Default(), func() time.Time { return day(7) })
+	srv := New(st.DB(), true, slog.Default(), func() time.Time { return day(7) })
 	f.srv = httptest.NewServer(srv.Handler())
 	t.Cleanup(f.srv.Close)
 	return f
