@@ -1,11 +1,18 @@
 module github.com/VoteForTruth/vft-indexer
 
-go 1.21.3
+go 1.26.0
 
 require (
-	github.com/oasisprotocol/curve25519-voi v0.0.0-20220328075252-7dd334e3daae // indirect
-	github.com/sigurn/crc16 v0.0.0-20211026045750-20ab5afb07e3 // indirect
-	github.com/xssnick/tonutils-go v1.8.5 // indirect
-	golang.org/x/crypto v0.0.0-20220321153916-2c7772ba3064 // indirect
-	golang.org/x/sys v0.1.0 // indirect
+	github.com/jackc/pgx/v5 v5.13.0
+	github.com/xssnick/tonutils-go v1.19.1
+)
+
+require (
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
+	github.com/pierrec/lz4/v4 v4.1.28 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )
