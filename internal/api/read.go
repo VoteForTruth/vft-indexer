@@ -80,6 +80,10 @@ func (r reader) children(ctx context.Context, parents []string) ([]statementRow,
 		`select `+statementColumns+` from statements where parent = any($1) and not hidden order by idx`, parents)
 }
 
+func (r reader) byAuthor(ctx context.Context, author string) ([]statementRow, error) {
+	return scanStatements(ctx, r.pool, `select `+statementColumns+` from statements where author = $1 order by created_lt desc`, author)
+}
+
 func (r reader) hidden(ctx context.Context) ([]statementRow, error) {
 	return scanStatements(ctx, r.pool, `select `+statementColumns+` from statements where hidden order by hidden_at desc`)
 }

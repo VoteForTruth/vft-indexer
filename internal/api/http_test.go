@@ -225,6 +225,34 @@ func TestVotesAndWallets(t *testing.T) {
 	}
 }
 
+func TestWalletStatements(t *testing.T) {
+	f := setup(t)
+
+	var body struct{ Statements []statementJSON }
+	get(t, f, "/wallets/"+friendly(f.author, true)+"/statements", 200, &body)
+	if len(body.Statements) != 6 {
+		t.Fatalf("expected all 6 statements of the author, got %d", len(body.Statements))
+	}
+	if body.Statements[0].Text != "Newer question" {
+		t.Errorf("newest first: got %q", body.Statements[0].Text)
+	}
+
+	var hidden *statementJSON
+	for i := range body.Statements {
+		if body.Statements[i].Text == "Spam" {
+			hidden = &body.Statements[i]
+		}
+	}
+	if hidden == nil || hidden.Hidden == nil || *hidden.Hidden.Reason != "spam" {
+		t.Errorf("the author must see their hidden statement with the reason: %+v", hidden)
+	}
+
+	get(t, f, "/wallets/"+friendly(f.bob, true)+"/statements", 200, &body)
+	if len(body.Statements) != 0 {
+		t.Errorf("bob wrote nothing: %+v", body.Statements)
+	}
+}
+
 func TestModerationAndErrors(t *testing.T) {
 	f := setup(t)
 

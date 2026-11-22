@@ -36,6 +36,7 @@ Amounts and weights are strings with nanotons. Contract addresses are bounceable
 | `GET /statements/{address}` | a statement with its pro and con arguments, each side sorted by weight |
 | `GET /statements/{address}/votes` | voters, largest first |
 | `GET /wallets/{address}/votes` | current votes of a wallet |
+| `GET /wallets/{address}/statements` | statements and arguments written by a wallet, hidden ones marked |
 | `GET /wallets/{address}/donations` | donations received as an author and sent |
 | `GET /moderation` | hidden statements with reasons |
 | `GET /health` | last indexed masterchain block |

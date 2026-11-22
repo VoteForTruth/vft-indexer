@@ -38,6 +38,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /statements/{address}/votes", s.handle(s.statementVotes))
 	mux.HandleFunc("GET /wallets/{address}/votes", s.handle(s.walletVotes))
 	mux.HandleFunc("GET /wallets/{address}/donations", s.handle(s.walletDonations))
+	mux.HandleFunc("GET /wallets/{address}/statements", s.handle(s.walletStatements))
 	mux.HandleFunc("GET /moderation", s.handle(s.moderation))
 	mux.HandleFunc("GET /health", s.handle(s.health))
 	return cors(mux)
@@ -126,6 +127,7 @@ type statementJSON struct {
 	Arguments argumentsJSON `json:"arguments"`
 	Result    resultJSON    `json:"result"`
 	Activity  *int          `json:"activity_24h,omitempty"`
+	Hidden    *hiddenJSON   `json:"hidden,omitempty"` // only in the author's own list
 }
 
 func (s *Server) contract(raw string) string {
@@ -433,6 +435,37 @@ func (s *Server) walletVotes(r *http.Request) (any, error) {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Since.After(list[j].Since) })
 	return map[string]any{"votes": list}, nil
+}
+
+type hiddenJSON struct {
+	Reason *string `json:"reason"`
+}
+
+// GET /wallets/{address}/statements: statements and arguments written by the wallet,
+// newest first. Hidden ones are included and marked, so the author knows why.
+func (s *Server) walletStatements(r *http.Request) (any, error) {
+	author, err := parseAddress(r)
+	if err != nil {
+		return nil, err
+	}
+	statements, err := s.read.byAuthor(r.Context(), author)
+	if err != nil {
+		return nil, err
+	}
+	t, err := s.loadTree(r, statements)
+	if err != nil {
+		return nil, err
+	}
+
+	list := []statementJSON{}
+	for _, st := range statements {
+		js := s.statementJSON(st, t)
+		if st.Hidden {
+			js.Hidden = &hiddenJSON{Reason: st.Reason}
+		}
+		list = append(list, js)
+	}
+	return map[string]any{"statements": list}, nil
 }
 
 type donationJSON struct {
