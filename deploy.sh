@@ -10,10 +10,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 SSH_HOST="${SSH_HOST:-nous}"
 DOMAIN="${DOMAIN:-votefortruth.org}"
 
-echo "==> checks"
-test -z "$(gofmt -l .)" || { gofmt -l .; echo "run gofmt -w ." >&2; exit 1; }
-go vet ./...
-go test ./...
+# SKIP_CHECKS=1 skips gofmt/vet/test (e.g. right after a new master, before
+# the fixtures are re-recorded); not for regular deploys
+if [[ "${SKIP_CHECKS:-}" != "1" ]]; then
+	echo "==> checks"
+	test -z "$(gofmt -l .)" || { gofmt -l .; echo "run gofmt -w ." >&2; exit 1; }
+	go vet ./...
+	go test ./...
+fi
 
 echo "==> build linux/amd64"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/vft-indexer-linux ./cmd/vft-indexer

@@ -232,6 +232,7 @@ type Statement struct {
 	Author    string
 	Text      string
 	URL       *string
+	Lang      string
 	CreatedAt time.Time
 	CreatedLT uint64
 	Hidden    bool
@@ -239,10 +240,10 @@ type Statement struct {
 
 func (t Tx) InsertStatement(ctx context.Context, st Statement) error {
 	_, err := t.tx.ExecContext(ctx, `
-		insert into statements (address, root, parent, depth, idx, pro, author, text, url, created_at, created_lt)
-		values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+		insert into statements (address, root, parent, depth, idx, pro, author, text, url, lang, created_at, created_lt)
+		values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 		on conflict (address) do nothing`,
-		st.Address, st.Root, st.Parent, st.Depth, st.Idx, st.Pro, st.Author, st.Text, st.URL, st.CreatedAt.UTC(), int64(st.CreatedLT))
+		st.Address, st.Root, st.Parent, st.Depth, st.Idx, st.Pro, st.Author, st.Text, st.URL, st.Lang, st.CreatedAt.UTC(), int64(st.CreatedLT))
 	return err
 }
 

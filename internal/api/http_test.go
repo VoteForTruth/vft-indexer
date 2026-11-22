@@ -64,8 +64,12 @@ func setup(t *testing.T) fixture {
 			}
 			if err == nil {
 				lt++
+				lang := "ru"
+				if a == f.root2 {
+					lang = "en" // the newer question is in English
+				}
 				err = tx.InsertStatement(ctx, store.Statement{Address: a, Root: root, Parent: parent, Depth: depth, Idx: uint32(idx), Pro: pro,
-					Author: f.author, Text: text, CreatedAt: created, CreatedLT: lt})
+					Author: f.author, Text: text, Lang: lang, CreatedAt: created, CreatedLT: lt})
 			}
 		}
 		event := func(kind store.EventKind, statement, wallet string, amount *big.Int, at time.Time) {
@@ -289,7 +293,7 @@ func TestDeletedStatement(t *testing.T) {
 			return err
 		}
 		if err := tx.InsertStatement(ctx, store.Statement{Address: p3, Root: f.root, Parent: f.root, Depth: 1, Idx: 2, Pro: true,
-			Author: f.author, Text: "Hasty", CreatedAt: day(6), CreatedLT: 1000}); err != nil {
+			Author: f.author, Text: "Hasty", Lang: "en", CreatedAt: day(6), CreatedLT: 1000}); err != nil {
 			return err
 		}
 		if err := tx.InsertEvent(ctx, store.Event{Account: addr("vote-p3"), LT: 1001, TxHash: []byte{1}, Time: day(6),
@@ -416,4 +420,31 @@ func TestURLHistory(t *testing.T) {
 	if detail.Statement.URLChanged {
 		t.Error("root marked as changed")
 	}
+}
+
+func TestFeedByLanguage(t *testing.T) {
+	f := setup(t)
+
+	type feed struct {
+		Total      int
+		Statements []struct{ Text, Lang string }
+	}
+	var all, ru, en, both feed
+	get(t, f, "/statements", 200, &all)
+	get(t, f, "/statements?lang=ru", 200, &ru)
+	get(t, f, "/statements?lang=en", 200, &en)
+	get(t, f, "/statements?lang=ru,en", 200, &both)
+
+	if all.Total != 2 || both.Total != 2 {
+		t.Errorf("all languages: %d / %d", all.Total, both.Total)
+	}
+	if ru.Total != 1 || ru.Statements[0].Text != "Question" || ru.Statements[0].Lang != "ru" {
+		t.Errorf("ru: %+v", ru)
+	}
+	if en.Total != 1 || en.Statements[0].Lang != "en" {
+		t.Errorf("en: %+v", en)
+	}
+
+	get(t, f, "/statements?lang=RU", 400, nil)
+	get(t, f, "/statements?lang=rus", 400, nil)
 }

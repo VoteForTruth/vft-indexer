@@ -246,6 +246,7 @@ func (p *Processor) storeStatement(ctx context.Context, dbtx store.Tx, c *store.
 		Author:    Raw(m.Owner),
 		Text:      m.Data.Statement,
 		URL:       m.Data.URL,
+		Lang:      m.Data.Lang,
 		CreatedAt: txTime(tx),
 		CreatedLT: tx.LT,
 	})

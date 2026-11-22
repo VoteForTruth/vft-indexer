@@ -38,6 +38,7 @@ type statementRow struct {
 	Author    string
 	Text      string
 	URL       *string
+	Lang      string
 	CreatedAt time.Time
 	Hidden    bool
 	Reason    *string
@@ -50,7 +51,7 @@ type statementRow struct {
 	URLChanged bool
 }
 
-const statementColumns = `address, root, parent, depth, idx, pro, author, text, url, created_at, hidden, hidden_reason, hidden_at, deleted_at is not null,
+const statementColumns = `address, root, parent, depth, idx, pro, author, text, url, lang, created_at, hidden, hidden_reason, hidden_at, deleted_at is not null,
 	coalesce((select c.next_pro + c.next_con from contracts c where c.address = statements.address), 0) = 0,
 	(select count(*) from url_history h where h.statement = statements.address) > 1`
 
@@ -64,7 +65,7 @@ func scanStatements(ctx context.Context, db *sql.DB, query string, args ...any) 
 	var list []statementRow
 	for rows.Next() {
 		var s statementRow
-		err = rows.Scan(&s.Address, &s.Root, &s.Parent, &s.Depth, &s.Idx, &s.Pro, &s.Author, &s.Text, &s.URL, &s.CreatedAt, &s.Hidden, &s.Reason, &s.HiddenAt, &s.Deleted, &s.Deletable, &s.URLChanged)
+		err = rows.Scan(&s.Address, &s.Root, &s.Parent, &s.Depth, &s.Idx, &s.Pro, &s.Author, &s.Text, &s.URL, &s.Lang, &s.CreatedAt, &s.Hidden, &s.Reason, &s.HiddenAt, &s.Deleted, &s.Deletable, &s.URLChanged)
 		if err != nil {
 			return nil, err
 		}
@@ -89,8 +90,13 @@ func (r reader) statement(ctx context.Context, address string) (statementRow, er
 	return rows[0], nil
 }
 
-func (r reader) roots(ctx context.Context) ([]statementRow, error) {
-	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where depth = 0 and not hidden and deleted_at is null`)
+// roots returns the visible topics, only in the given languages if any.
+func (r reader) roots(ctx context.Context, langs []string) ([]statementRow, error) {
+	if len(langs) == 0 {
+		return scanStatements(ctx, r.db, `select `+statementColumns+` from statements where depth = 0 and not hidden and deleted_at is null`)
+	}
+	return scanStatements(ctx, r.db, `select `+statementColumns+` from statements
+		where depth = 0 and not hidden and deleted_at is null and lang in (select value from json_each(?1))`, list(langs))
 }
 
 func (r reader) children(ctx context.Context, parents []string) ([]statementRow, error) {

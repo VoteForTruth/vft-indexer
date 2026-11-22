@@ -29,6 +29,7 @@ create table statements (
     author        text not null,
     text          text not null,
     url           text,
+    lang          text not null,  -- ISO 639-1 language of the text, e.g. "ru"
     created_at    timestamp not null,
     created_lt    integer not null,
     -- moderation: hidden from the API, with a public reason and time
@@ -42,6 +43,7 @@ create table statements (
 
 create index statements_parent on statements (parent);
 create index statements_root on statements (root);
+create index statements_lang on statements (lang) where depth = 0;
 
 -- The source of truth: everything else is derived from events.
 create table events (

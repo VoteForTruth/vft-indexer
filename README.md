@@ -17,6 +17,10 @@ Every addition to a vote is a lot that grows linearly to its full amount over **
 
 The result of a dispute is the weight of its direct pro arguments vs its direct con arguments. Concentration is the share of the largest 1 and 3 voters in the amount.
 
+### Language
+
+Every statement carries the language of its text (`"lang": "ru"`, ISO 639-1), set by the author in the contract. The feed can be limited to languages (`?lang=ru` or `?lang=ru,en`); arguments are shown in any language.
+
 ### Source links
 
 The text of a statement never changes; the author may replace its source link (`SetUrl`), e.g. when a site is blocked. Every link is kept: `GET /statements/{address}` returns `url_history` (the creation link first, then each replacement with its time), and statements carry `"url_changed": true` once the link was replaced.
@@ -40,7 +44,7 @@ Amounts and weights are strings with nanotons. Contract addresses are bounceable
 
 | Endpoint | |
 |---|---|
-| `GET /statements?sort=weight\|new\|active&limit=50&offset=0` | root statements (topics) |
+| `GET /statements?sort=weight\|new\|active&lang=ru,en&limit=50&offset=0` | root statements (topics), optionally only in the given languages |
 | `GET /statements/{address}` | a statement with its pro and con arguments, each side sorted by weight |
 | `GET /statements/{address}/votes` | voters, largest first |
 | `GET /wallets/{address}/votes` | current votes of a wallet |

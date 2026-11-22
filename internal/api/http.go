@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -121,6 +122,7 @@ type statementJSON struct {
 	Author    string        `json:"author"`
 	Text      string        `json:"text"`
 	URL       *string       `json:"url"`
+	Lang      string        `json:"lang"` // ISO 639-1 of the text, e.g. "ru"
 	CreatedAt time.Time     `json:"created_at"`
 	Votes     votesJSON     `json:"votes"`
 	Donations string        `json:"donations"`
@@ -230,6 +232,7 @@ func (s *Server) statementJSON(st statementRow, t tree) statementJSON {
 		Author:    s.wallet(st.Author),
 		Text:      st.Text,
 		URL:       st.URL,
+		Lang:      st.Lang,
 		CreatedAt: st.CreatedAt,
 		Votes: votesJSON{
 			Amount:    stats.amount.String(),
@@ -264,7 +267,19 @@ func (s *Server) feed(r *http.Request) (any, error) {
 		return nil, badRequest("sort must be weight, new or active")
 	}
 
-	roots, err := s.read.roots(r.Context())
+	// ?lang=ru or ?lang=ru,uk: topics in these languages only; arguments are
+	// always shown in any language
+	var langs []string
+	if v := r.URL.Query().Get("lang"); v != "" {
+		for _, l := range strings.Split(v, ",") {
+			if len(l) != 2 || l[0] < 'a' || l[0] > 'z' || l[1] < 'a' || l[1] > 'z' {
+				return nil, badRequest("lang must be ISO 639-1 codes, e.g. ru or ru,en")
+			}
+			langs = append(langs, l)
+		}
+	}
+
+	roots, err := s.read.roots(r.Context(), langs)
 	if err != nil {
 		return nil, err
 	}

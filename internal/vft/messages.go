@@ -33,6 +33,7 @@ var ErrUnknownMessage = errors.New("unknown message")
 type Data struct {
 	Statement string
 	URL       *string
+	Lang      string // ISO 639-1, two lowercase letters
 }
 
 type NewParentStatement struct {
@@ -147,7 +148,7 @@ func ParseMessage(body *cell.Cell) (any, error) {
 	return msg, nil
 }
 
-// loadData reads VftData { statement: string, url: string? }:
+// loadData reads VftData { statement: string, url: string?, lang: uint16 }:
 // a string is a ref to a snake cell, a nullable string is a maybe-ref.
 func loadData(s *cell.Slice) (Data, error) {
 	ref, err := s.LoadRef()
@@ -164,7 +165,13 @@ func loadData(s *cell.Slice) (Data, error) {
 	if err != nil {
 		return Data{}, err
 	}
-	return Data{Statement: statement, URL: url}, nil
+
+	// lang: uint16, two ASCII letters; the contract accepts only a-z
+	code, err := s.LoadUInt(16)
+	if err != nil {
+		return Data{}, fmt.Errorf("lang: %w", err)
+	}
+	return Data{Statement: statement, URL: url, Lang: string([]byte{byte(code >> 8), byte(code)})}, nil
 }
 
 // loadMaybeString reads a nullable string: a maybe-ref to a snake cell.
