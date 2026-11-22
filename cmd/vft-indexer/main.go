@@ -1,5 +1,9 @@
-// vft-indexer scans the TON blockchain for Vote For Truth contracts and stores
-// their history in Postgres.
+// vft-indexer scans the TON blockchain for Vote For Truth contracts, stores
+// their history in Postgres and serves it as a read-only JSON API.
+//
+//	vft-indexer [flags]                       index and serve the API
+//	vft-indexer hide <statement> <reason>     hide a statement from the API
+//	vft-indexer unhide <statement>            show it again
 package main
 
 import (
@@ -8,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +22,7 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
 
+	"github.com/VoteForTruth/vft-indexer/internal/api"
 	"github.com/VoteForTruth/vft-indexer/internal/indexer"
 	"github.com/VoteForTruth/vft-indexer/internal/scanner"
 	"github.com/VoteForTruth/vft-indexer/internal/store"
@@ -35,6 +41,7 @@ type config struct {
 	startSeqno uint
 	proof      string
 	prefetch   int
+	httpAddr   string
 	verbose    bool
 }
 
@@ -46,6 +53,7 @@ func main() {
 	flag.UintVar(&cfg.startSeqno, "start-seqno", 0, "masterchain seqno to start from on the first run (default: found from the master deploy)")
 	flag.StringVar(&cfg.proof, "proof", "fast", "lite server proof checks: fast or unsafe")
 	flag.IntVar(&cfg.prefetch, "prefetch", 16, "masterchain blocks fetched ahead in parallel")
+	flag.StringVar(&cfg.httpAddr, "http", envOr("VFT_HTTP", ":8080"), "API listen address, empty to disable")
 	flag.BoolVar(&cfg.verbose, "v", false, "debug logging")
 	flag.Parse()
 
@@ -58,7 +66,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, cfg, log); err != nil && !errors.Is(err, context.Canceled) {
+	var err error
+	switch flag.Arg(0) {
+	case "hide", "unhide":
+		err = moderate(ctx, cfg, flag.Args())
+	case "":
+		err = run(ctx, cfg, log)
+	default:
+		err = fmt.Errorf("unknown command %q", flag.Arg(0))
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Error("stopped", "err", err)
 		os.Exit(1)
 	}
@@ -91,12 +108,12 @@ func run(ctx context.Context, cfg config, log *slog.Logger) error {
 		return err
 	}
 
-	api, err := connect(ctx, configURL, cfg.proof, log)
+	liteAPI, err := connect(ctx, configURL, cfg.proof, log)
 	if err != nil {
 		return err
 	}
 
-	if err = checkMasterCode(ctx, api, code, master); err != nil {
+	if err = checkMasterCode(ctx, liteAPI, code, master); err != nil {
 		return err
 	}
 
@@ -105,13 +122,71 @@ func run(ctx context.Context, cfg config, log *slog.Logger) error {
 		return err
 	}
 
-	from, err := startSeqno(ctx, st, api, master, cfg, log)
+	from, err := startSeqno(ctx, st, liteAPI, master, cfg, log)
 	if err != nil {
 		return err
 	}
 	log.Info("scanning", "network", cfg.network, "master", master.String(), "from", from)
 
-	return scanner.New(api, processor, st, log, cfg.prefetch).Run(ctx, from)
+	// the scanner and the API run together; if one stops, the other is stopped too
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, 2)
+
+	go func() {
+		errs <- scanner.New(liteAPI, processor, st, log, cfg.prefetch).Run(ctx, from)
+	}()
+
+	if cfg.httpAddr != "" {
+		srv := &http.Server{
+			Addr:              cfg.httpAddr,
+			Handler:           api.New(st.Pool(), cfg.network == "testnet", log, time.Now).Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			log.Info("api listening", "addr", cfg.httpAddr)
+			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				errs <- fmt.Errorf("api: %w", err)
+			}
+		}()
+		defer func() {
+			shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+			defer done()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+	}
+
+	err = <-errs
+	cancel()
+	return err
+}
+
+// moderate hides or unhides a statement: `hide <address> <reason>`, `unhide <address>`.
+func moderate(ctx context.Context, cfg config, args []string) error {
+	hide := args[0] == "hide"
+	if (hide && len(args) != 3) || (!hide && len(args) != 2) {
+		return errors.New("usage: hide <statement> <reason> | unhide <statement>")
+	}
+	addr, err := address.ParseAddr(args[1])
+	if err != nil {
+		return fmt.Errorf("statement address: %w", err)
+	}
+
+	st, err := store.Open(ctx, cfg.dsn)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	reason := ""
+	if hide {
+		reason = args[2]
+	}
+	if err = st.SetHidden(ctx, addr.StringRaw(), hide, reason); err != nil {
+		return err
+	}
+	fmt.Printf("%s %s\n", args[0], addr.String())
+	return nil
 }
 
 func connect(ctx context.Context, configURL, proof string, log *slog.Logger) (ton.APIClientWrapped, error) {

@@ -14,6 +14,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 
 	"github.com/VoteForTruth/vft-indexer/internal/store"
+	"github.com/VoteForTruth/vft-indexer/internal/store/storetest"
 	"github.com/VoteForTruth/vft-indexer/internal/vft"
 )
 
@@ -25,26 +26,7 @@ var (
 )
 
 func testStore(t *testing.T) *store.Store {
-	t.Helper()
-	ctx := context.Background()
-
-	dsn := os.Getenv("VFT_TEST_DSN")
-	if dsn == "" {
-		dsn = "postgres://localhost/vft_indexer_test?sslmode=disable"
-	}
-	st, err := store.Open(ctx, dsn)
-	if err != nil {
-		t.Skipf("no test database: %v", err)
-	}
-	t.Cleanup(st.Close)
-
-	if _, err = st.Pool().Exec(ctx, `drop schema public cascade; create schema public`); err != nil {
-		t.Fatal(err)
-	}
-	if err = st.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return st
+	return storetest.Open(t, "indexer_test")
 }
 
 // scenarioTxs returns all fixture transactions in global logical time order,

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -282,4 +283,27 @@ func (s *Store) SetCursor(ctx context.Context, seqno uint32) error {
 		insert into scan_cursor (id, mc_seqno) values (1, $1)
 		on conflict (id) do update set mc_seqno = excluded.mc_seqno`, int64(seqno))
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Moderation
+// ---------------------------------------------------------------------------
+
+// SetHidden hides a statement from the API (or shows it again). The contract
+// itself is not affected. Returns ErrNotFound for an unknown statement.
+func (s *Store) SetHidden(ctx context.Context, address string, hidden bool, reason string) error {
+	var tag pgconn.CommandTag
+	var err error
+	if hidden {
+		tag, err = s.pool.Exec(ctx, `update statements set hidden = true, hidden_reason = $2, hidden_at = now() where address = $1`, address, reason)
+	} else {
+		tag, err = s.pool.Exec(ctx, `update statements set hidden = false, hidden_reason = null, hidden_at = null where address = $1`, address)
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
