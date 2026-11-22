@@ -1,0 +1,38 @@
+# systemd unit of the indexer on the server nous — a copy of
+# /etc/systemd/system/vft-indexer.service. deploy.sh only replaces the binary and
+# restarts the service. After editing: sudo systemctl daemon-reload.
+#
+# Layout (Nous rules): read-only binary in /opt/vft-indexer, settings in
+# /etc/vft-indexer/env, the SQLite database in /var/lib/vft-indexer — the only
+# writable path (ProtectSystem=strict + ReadWritePaths).
+[Unit]
+Description=Vote For Truth indexer (TON blocks -> SQLite -> read-only API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vft-indexer
+Group=vft-indexer
+WorkingDirectory=/var/lib/vft-indexer
+EnvironmentFile=/etc/vft-indexer/env
+ExecStart=/opt/vft-indexer/vft-indexer
+Restart=on-failure
+RestartSec=5
+# The host is shared with Ether and Aida (2 GB RAM). The indexer needs tens of
+# megabytes; the limit keeps a runaway one from hurting the neighbours.
+MemoryHigh=150M
+MemoryMax=250M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/vft-indexer
+
+[Install]
+WantedBy=multi-user.target
